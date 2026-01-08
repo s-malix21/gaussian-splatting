@@ -128,7 +128,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # DEPTH SUPERVISION - DA3 Integration (add after line 109)
         # Add depth loss if depth maps directory is provided
-        if hasattr(opt, 'depth_maps_dir') and opt.depth_maps_dir is not None and iteration % 10 == 0:
+        if hasattr(opt, 'depths') and opt.depths is not None and iteration % 10 == 0:  # ← CHANGED: depth_maps_dir → depths
             try:
                 import numpy as np
                 from pathlib import Path
@@ -136,7 +136,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # Construct depth map filename
                 img_name = Path(viewpoint_cam.image_name).stem
                 depth_filename = f"{img_name}_depth.npy"
-                depth_path = os.path.join(opt.depth_maps_dir, depth_filename)
+                depth_path = os.path.join(opt.depths, depth_filename)  # ← CHANGED: depth_maps_dir → depths
                 
                 if os.path.exists(depth_path):
                     # Load DA3 depth map
