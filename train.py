@@ -125,6 +125,69 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
+
+        # DEPTH SUPERVISION - DA3 Integration (add after line 109)
+        # Add depth loss if depth maps directory is provided
+        if hasattr(opt, 'depth_maps_dir') and opt.depth_maps_dir is not None and iteration % 10 == 0:
+            try:
+                import numpy as np
+                from pathlib import Path
+                
+                # Construct depth map filename
+                img_name = Path(viewpoint_cam.image_name).stem
+                depth_filename = f"{img_name}_depth.npy"
+                depth_path = os.path.join(opt.depth_maps_dir, depth_filename)
+                
+                if os.path.exists(depth_path):
+                    # Load DA3 depth map
+                    gt_depth = torch.from_numpy(np.load(depth_path)).cuda().float()
+                    
+                    # Get rendered depth from Gaussians
+                    if "depth" in render_pkg:
+                        rendered_depth = render_pkg["depth"]
+                        
+                        # Ensure same size
+                        if rendered_depth.shape != gt_depth.shape:
+                            gt_depth = torch.nn.functional.interpolate(
+                                gt_depth.unsqueeze(0).unsqueeze(0),
+                                size=rendered_depth.shape,
+                                mode='bilinear',
+                                align_corners=False
+                            ).squeeze()
+                        
+                        # Create valid mask (ignore zero/invalid depths)
+                        valid_mask = (gt_depth > 0) & torch.isfinite(gt_depth) & torch.isfinite(rendered_depth)
+                        
+                        if valid_mask.sum() > 100:  # Need enough valid pixels
+                            # Scale-invariant alignment (DA3 depth is relative)
+                            rendered_valid = rendered_depth[valid_mask]
+                            gt_valid = gt_depth[valid_mask]
+                            
+                            # Compute scale and shift via least squares
+                            scale = (rendered_valid * gt_valid).sum() / (rendered_valid * rendered_valid).sum()
+                            shift = gt_valid.mean() - scale * rendered_valid.mean()
+                            
+                            # Align rendered depth to GT scale
+                            aligned_depth = scale * rendered_depth + shift
+                            
+                            # Compute L1 depth loss
+                            depth_loss = torch.nn.functional.l1_loss(
+                                aligned_depth[valid_mask], 
+                                gt_depth[valid_mask]
+                            )
+                            
+                            # Add to total loss with weight
+                            depth_weight = 0.1  # Adjust this (0.05-0.2 recommended)
+                            loss = loss + depth_weight * depth_loss
+                            
+                            # Log depth loss (optional)
+                            if iteration % 100 == 0:
+                                print(f"  [DA3 Depth] Loss: {depth_loss.item():.4f}, Scale: {scale.item():.3f}, Shift: {shift.item():.3f}")
+            
+            except Exception as e:
+                # Silently skip if depth unavailable (don't crash training)
+                pass
+
         # Depth regularization
         Ll1depth_pure = 0.0
         if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
